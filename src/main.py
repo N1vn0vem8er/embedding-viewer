@@ -1,22 +1,50 @@
 import os
 import streamlit as st
 import pandas as pd
-from gensim.models import FastText
+from gensim.models import FastText, Word2Vec, KeyedVectors
 import plotly.express as px
 from sklearn.decomposition import PCA
 
 MODELS_DIR = "./models"
 
-st.set_page_config(page_title="FastText Viewer", layout="wide")
+st.set_page_config(page_title="Embedding Viewer", layout="wide")
 
 def get_model_files(directory):
     if not os.path.exists(directory):
         os.makedirs(directory, exist_ok=True)
-    return [f for f in os.listdir(directory) if f.endswith('.model')]
+    valid_extensions = ('.model', '.vec', '.txt', '.bin', '.kv', '.glove')
+    return [f for f in os.listdir(directory) if f.endswith(valid_extensions)]
+
+def get_wv(model):
+    return getattr(model, 'wv', model)
 
 @st.cache_resource
-def load_fasttext_model(filepath):
-    return FastText.load(filepath)
+def load_embedding_model(filepath):
+    try:
+        return KeyedVectors.load(filepath)
+    except Exception:
+        pass
+    try:
+        return FastText.load(filepath)
+    except Exception:
+        pass
+    try:
+        return Word2Vec.load(filepath)
+    except Exception:
+        pass
+    try:
+        return KeyedVectors.load_word2vec_format(filepath, binary=False)
+    except Exception:
+        pass
+    try:
+        return KeyedVectors.load_word2vec_format(filepath, binary=True)
+    except Exception:
+        pass
+    try:
+        return KeyedVectors.load_word2vec_format(filepath, binary=False, no_header=True)
+    except Exception:
+        pass
+
 
 model_files = get_model_files(MODELS_DIR)
 
@@ -24,21 +52,25 @@ if model_files:
     selected_model_file = st.selectbox("Select model:", model_files)
     model_path = os.path.join(MODELS_DIR, selected_model_file)
     try:
-        model = load_fasttext_model(model_path)
+        model = load_embedding_model(model_path)
     except Exception as e:
         st.error(f"Error loading model: {e}")
         model = None
 else:
-        st.warning(f"No `.model` files found in directory: `{os.path.abspath(MODELS_DIR)}`")
+    st.warning(f"No valid model files found in directory: `{os.path.abspath(MODELS_DIR)}`")
 
-if model:
-    vocab_size = len(model.wv)
-    vector_dim = model.wv.vector_size
+wv = get_wv(model) if model else None
+
+if wv:
+    vocab_size = len(wv)
+    vector_dim = wv.vector_size
+    model_type = type(model).__name__
 else:
     vocab_size, vector_dim = 0, 0
+    model_type = ""
 
-st.title("FastText viewer — Hexaemeron lemmatized corpus")
-st.caption(f"{vocab_size} vocab · {vocab_size} vectors shipped · dim={vector_dim} · trained in FastText")
+st.title("Embedding viewer")
+st.caption(f"{vocab_size} vocab · {vocab_size} vectors shipped · dim={vector_dim} · trained in {model_type}")
 
 if "query_word" not in st.session_state:
     st.session_state["query_word"] = "μελισσα"
@@ -59,9 +91,9 @@ with col1:
     if search_clicked or current_input != st.session_state["query_word"]:
         st.session_state["query_word"] = current_input
 
-    if st.session_state["query_word"] and model:
+    if st.session_state["query_word"] and wv:
         try:
-            similar_words = model.wv.most_similar(st.session_state["query_word"], topn=15)
+            similar_words = wv.most_similar(st.session_state["query_word"], topn=15)
             df_neighbours = pd.DataFrame(similar_words, columns=["Word", "Score"])
             df_neighbours["Score"] = df_neighbours["Score"].round(3)
 
@@ -91,10 +123,14 @@ with col2:
     filter_query = st.text_input("Filter vocabulary", placeholder="Filter the top vocabulary...", label_visibility="collapsed")
     st.caption("Click a row to look up its neighbours and add it to the plot. Click column headers to sort.")
 
-    if model:
+    if wv:
         vocab_list = []
-        for word in model.wv.key_to_index.keys():
-            freq = model.wv.get_vecattr(word, "count") if model.wv.has_index_for(word) else None
+        for word in wv.key_to_index.keys():
+            try:
+                freq = wv.get_vecattr(word, "count")
+            except (ValueError, KeyError, AttributeError):
+                freq = None
+
             vocab_list.append({"Word": word, "Frequency": freq})
 
         df_vocab = pd.DataFrame(vocab_list)
@@ -110,14 +146,14 @@ with col2:
 st.divider()
 st.subheader("2-D PCA PROJECTION")
 
-if st.session_state["query_word"] and model:
+if st.session_state["query_word"] and wv:
     try:
         query = st.session_state["query_word"]
 
-        sim_words = model.wv.most_similar(query, topn=15)
+        sim_words = wv.most_similar(query, topn=15)
         words_to_plot = [query] + [w for w, _ in sim_words]
 
-        vectors = [model.wv[w] for w in words_to_plot]
+        vectors = [wv[w] for w in words_to_plot]
 
         pca = PCA(n_components=2)
         pca_coords = pca.fit_transform(vectors)
