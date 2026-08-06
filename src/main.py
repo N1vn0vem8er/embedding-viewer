@@ -2,6 +2,7 @@ import os
 import streamlit as st
 import pandas as pd
 from gensim.models import FastText, Word2Vec, KeyedVectors
+from gensim.models.fasttext import load_facebook_model
 import plotly.express as px
 from sklearn.decomposition import PCA
 
@@ -30,6 +31,10 @@ def load_embedding_model(filepath):
         pass
     try:
         return Word2Vec.load(filepath)
+    except Exception:
+        pass
+    try:
+        return load_facebook_model(filepath)
     except Exception:
         pass
     try:
