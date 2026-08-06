@@ -3,3 +3,4 @@ gensim
 pandas
 scikit-learn
 plotly
+psutil

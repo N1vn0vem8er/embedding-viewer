@@ -1,4 +1,6 @@
 import os
+import gc
+import psutil
 import streamlit as st
 import pandas as pd
 from gensim.models import FastText, Word2Vec, KeyedVectors
@@ -9,6 +11,12 @@ from sklearn.decomposition import PCA
 MODELS_DIR = "./models"
 
 st.set_page_config(page_title="Embedding Viewer", layout="wide")
+
+def check_and_free_memory(threshold_percent=80.0):
+    mem = psutil.virtual_memory()
+    if mem.percent > threshold_percent:
+        st.cache_resource.clear()
+        gc.collect()
 
 def get_model_files(directory):
     if not os.path.exists(directory):
@@ -21,6 +29,8 @@ def get_wv(model):
 
 @st.cache_resource
 def load_embedding_model(filepath):
+    check_and_free_memory(80.0)
+
     try:
         return KeyedVectors.load(filepath)
     except Exception:
