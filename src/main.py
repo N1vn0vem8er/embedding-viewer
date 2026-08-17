@@ -27,6 +27,18 @@ def get_model_files(directory):
 def get_wv(model):
     return getattr(model, 'wv', model)
 
+def get_sentence_vector(text, wv):
+    words = text.lower().split()
+    vectors = []
+    for w in words:
+        try:
+            vectors.append(wv[w])
+        except KeyError:
+            continue
+    if len(vectors) == 0:
+        return np.zeros(wv.vector_size)
+    return np.mean(vectors, axis=0)
+
 @st.cache_resource
 def load_embedding_model(filepath):
     check_and_free_memory(80.0)
@@ -87,109 +99,137 @@ else:
 st.title("Embedding viewer")
 st.caption(f"{vocab_size} vocab · {vocab_size} vectors shipped · dim={vector_dim} · trained in {model_type}")
 
-if "query_word" not in st.session_state:
-    st.session_state["query_word"] = "μελισσα"
+tab1, tab2 = st.tabs([
+    "Exploration (k-NN & PCA)",
+    "Out Of Vocabulary",
+])
 
-col1, col2 = st.columns(2)
+with tab1:
 
-with col1:
-    st.subheader("NEAREST NEIGHBOURS")
+    if "query_word" not in st.session_state:
+        st.session_state["query_word"] = "μελισσα"
 
-    input_col, btn_col = st.columns([3, 1])
-    with input_col:
-        current_input = st.text_input("Search word", value=st.session_state["query_word"], label_visibility="collapsed")
-    with btn_col:
-        search_clicked = st.button("Search", use_container_width=True)
+    col1, col2 = st.columns(2)
 
-    st.caption("Cosine similarity over the trained word vectors. Click any neighbour to query it.")
+    with col1:
+        st.subheader("NEAREST NEIGHBOURS")
 
-    if search_clicked or current_input != st.session_state["query_word"]:
-        st.session_state["query_word"] = current_input
+        input_col, btn_col = st.columns([3, 1])
+        with input_col:
+            current_input = st.text_input("Search word", value=st.session_state["query_word"], label_visibility="collapsed")
+        with btn_col:
+            search_clicked = st.button("Search", use_container_width=True)
+
+        st.caption("Cosine similarity over the trained word vectors. Click any neighbour to query it.")
+
+        if search_clicked or current_input != st.session_state["query_word"]:
+            st.session_state["query_word"] = current_input
+
+        if st.session_state["query_word"] and wv:
+            try:
+                similar_words = wv.most_similar(st.session_state["query_word"], topn=15)
+                df_neighbours = pd.DataFrame(similar_words, columns=["Word", "Score"])
+                df_neighbours["Score"] = df_neighbours["Score"].round(3)
+
+                event = st.dataframe(
+                    df_neighbours,
+                    use_container_width=True,
+                    hide_index=True,
+                    selection_mode="single-row",
+                    on_select="rerun"
+                )
+
+                if event and event.selection["rows"]:
+                    selected_row = event.selection["rows"][0]
+                    clicked_word = df_neighbours.iloc[selected_row]["Word"]
+                    if clicked_word != st.session_state["query_word"]:
+                        st.session_state["query_word"] = clicked_word
+                        st.rerun()
+
+            except KeyError:
+                st.error(f"Word '{st.session_state['query_word']}' not found in model vocabulary.")
+            except Exception as e:
+                st.error(f"Search error: {e}")
+
+    with col2:
+        st.subheader("VOCABULARY BROWSER")
+
+        filter_query = st.text_input("Filter vocabulary", placeholder="Filter the top vocabulary...", label_visibility="collapsed")
+        st.caption("Click a row to look up its neighbours and add it to the plot. Click column headers to sort.")
+
+        if wv:
+            vocab_list = []
+            for word in wv.key_to_index.keys():
+                try:
+                    freq = wv.get_vecattr(word, "count")
+                except (ValueError, KeyError, AttributeError):
+                    freq = None
+
+                vocab_list.append({"Word": word, "Frequency": freq})
+
+            df_vocab = pd.DataFrame(vocab_list)
+            if filter_query:
+                df_vocab = df_vocab[df_vocab["Word"].str.contains(filter_query, case=False, na=False)]
+
+            st.dataframe(
+                df_vocab,
+                use_container_width=True,
+                hide_index=True
+            )
+
+    st.divider()
+    st.subheader("2-D PCA PROJECTION")
 
     if st.session_state["query_word"] and wv:
         try:
-            similar_words = wv.most_similar(st.session_state["query_word"], topn=15)
-            df_neighbours = pd.DataFrame(similar_words, columns=["Word", "Score"])
-            df_neighbours["Score"] = df_neighbours["Score"].round(3)
+            query = st.session_state["query_word"]
 
-            event = st.dataframe(
-                df_neighbours,
-                use_container_width=True,
-                hide_index=True,
-                selection_mode="single-row",
-                on_select="rerun"
+            sim_words = wv.most_similar(query, topn=15)
+            words_to_plot = [query] + [w for w, _ in sim_words]
+
+            vectors = [wv[w] for w in words_to_plot]
+
+            pca = PCA(n_components=2)
+            pca_coords = pca.fit_transform(vectors)
+
+            df_pca = pd.DataFrame(pca_coords, columns=["PC1", "PC2"])
+            df_pca["Word"] = words_to_plot
+            df_pca["Role"] = ["Query word"] + ["Nearest neighbor"] * len(sim_words)
+
+            fig = px.scatter(
+                df_pca,
+                x="PC1",
+                y="PC2",
+                text="Word",
+                color="Role",
+                color_discrete_map={"Query word": "#d9534f", "Nearest neighbor": "#0275d8"},
+                hover_name="Word"
             )
+            fig.update_traces(textposition='top center', marker=dict(size=10))
+            fig.update_layout(height=500, xaxis_title="Principal Component 1", yaxis_title="Principal Component 2")
 
-            if event and event.selection["rows"]:
-                selected_row = event.selection["rows"][0]
-                clicked_word = df_neighbours.iloc[selected_row]["Word"]
-                if clicked_word != st.session_state["query_word"]:
-                    st.session_state["query_word"] = clicked_word
-                    st.rerun()
+            st.plotly_chart(fig, use_container_width=True)
 
-        except KeyError:
-            st.error(f"Word '{st.session_state['query_word']}' not found in model vocabulary.")
-        except Exception as e:
-            st.error(f"Search error: {e}")
+        except Exception:
+            st.info("Unable to generate PCA plot for the current query.")
+with tab2:
+    st.subheader("Out Of Vocabulary Resilience")
 
-with col2:
-    st.subheader("VOCABULARY BROWSER")
+    oov_word = st.text_input("Enter a made-up or misspelled word:")
 
-    filter_query = st.text_input("Filter vocabulary", placeholder="Filter the top vocabulary...", label_visibility="collapsed")
-    st.caption("Click a row to look up its neighbours and add it to the plot. Click column headers to sort.")
+    if oov_word and wv:
+        in_vocab = oov_word in wv.key_to_index
 
-    if wv:
-        vocab_list = []
-        for word in wv.key_to_index.keys():
+        if in_vocab:
+            st.success(f"Word '{oov_word}' is in the vocabulary.")
+        else:
+            st.warning(f"Word '{oov_word}' is not in the vocabulary.")
             try:
-                freq = wv.get_vecattr(word, "count")
-            except (ValueError, KeyError, AttributeError):
-                freq = None
+                vec = wv[oov_word]
+                st.success(f"FastText successfully generated an n-gram embedding for '{oov_word}'.")
 
-            vocab_list.append({"Word": word, "Frequency": freq})
-
-        df_vocab = pd.DataFrame(vocab_list)
-        if filter_query:
-            df_vocab = df_vocab[df_vocab["Word"].str.contains(filter_query, case=False, na=False)]
-
-        st.dataframe(
-            df_vocab,
-            use_container_width=True,
-            hide_index=True
-        )
-
-st.divider()
-st.subheader("2-D PCA PROJECTION")
-
-if st.session_state["query_word"] and wv:
-    try:
-        query = st.session_state["query_word"]
-
-        sim_words = wv.most_similar(query, topn=15)
-        words_to_plot = [query] + [w for w, _ in sim_words]
-
-        vectors = [wv[w] for w in words_to_plot]
-
-        pca = PCA(n_components=2)
-        pca_coords = pca.fit_transform(vectors)
-
-        df_pca = pd.DataFrame(pca_coords, columns=["PC1", "PC2"])
-        df_pca["Word"] = words_to_plot
-        df_pca["Role"] = ["Query word"] + ["Nearest neighbor"] * len(sim_words)
-
-        fig = px.scatter(
-            df_pca,
-            x="PC1",
-            y="PC2",
-            text="Word",
-            color="Role",
-            color_discrete_map={"Query word": "#d9534f", "Nearest neighbor": "#0275d8"},
-            hover_name="Word"
-        )
-        fig.update_traces(textposition='top center', marker=dict(size=10))
-        fig.update_layout(height=500, xaxis_title="Principal Component 1", yaxis_title="Principal Component 2")
-
-        st.plotly_chart(fig, use_container_width=True)
-
-    except Exception:
-        st.info("Unable to generate PCA plot for the current query.")
+                st.write("Its closest neighbors are:")
+                sims = wv.most_similar(positive=[vec], topn=10)
+                st.dataframe(pd.DataFrame(sims, columns=["Neighbor in Vocab", "Similarity Score"]))
+            except KeyError:
+                st.error("This model does not support subword embeddings (it might be a standard Word2Vec/GloVe or missing n-gram data).")
