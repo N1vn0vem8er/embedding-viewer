@@ -53,15 +53,29 @@ def load_embedding_model(filepath):
             continue
     return None
 
-def get_similar_words(wv, query_word, metric="cosine", topn=15):
-    if metric == "cosine":
-        return wv.most_similar(query_word, topn=topn)
-
+def get_similar_words(wv, query_word, metric="cosine", topn=15, normalize_vectors=False):
     query_vec = wv[query_word]
     all_vectors = wv.vectors
     index_to_key = wv.index_to_key
 
-    if metric == "dot":
+    if normalize_vectors:
+            query_norm = np.linalg.norm(query_vec)
+            if query_norm > 0:
+                query_vec = query_vec / query_norm
+            if hasattr(wv, 'get_normed_vectors'):
+                all_vectors = wv.get_normed_vectors()
+            else:
+                norms = np.linalg.norm(all_vectors, axis=1, keepdims=True)
+                norms[norms == 0] = 1.0
+                all_vectors = all_vectors / norms
+
+    if metric == "cosine":
+        if normalize_vectors:
+            scores = np.dot(all_vectors, query_vec)
+            best_indices = np.argsort(scores)[::-1][:topn+1]
+        else:
+            return wv.most_similar(query_word, topn=topn)
+    elif metric == "dot":
         scores = np.dot(all_vectors, query_vec)
         best_indices = np.argsort(scores)[::-1][:topn+1]
     elif metric == "euclidean":
@@ -82,7 +96,7 @@ def get_similar_words(wv, query_word, metric="cosine", topn=15):
     for idx in best_indices:
         word = index_to_key[idx]
         if word != query_word:
-            if metric == "dot":
+            if metric in ["cosine", "dot"]:
                 val = float(scores[idx])
             else:
                 val = float(distances[idx])

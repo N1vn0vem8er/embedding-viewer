@@ -68,6 +68,12 @@ with tab1:
         selected_metric_label = st.selectbox("Distance Metric", list(metric_options.keys()))
         selected_metric = metric_options[selected_metric_label]
 
+        normalize_vectors = st.checkbox(
+                    "Normalize vectors",
+                    value=False,
+                    help="Scales the length of each vector to 1.0. Enable this option to even out the effects of word frequency."
+                )
+
         input_col, btn_col = st.columns([3, 1])
         with input_col:
             current_input = st.text_input("Search word", value=st.session_state["query_word"], label_visibility="collapsed")
@@ -81,7 +87,7 @@ with tab1:
 
         if st.session_state["query_word"] and wv:
             try:
-                similar_words = get_similar_words(wv, st.session_state["query_word"], metric=selected_metric, topn=15)
+                similar_words = get_similar_words(wv, st.session_state["query_word"], metric=selected_metric, topn=15, normalize_vectors=normalize_vectors)
                 val_col_name = "Score" if selected_metric in ["cosine", "dot"] else "Distance"
                 df_neighbours = pd.DataFrame(similar_words, columns=["Word", val_col_name])
                 df_neighbours[val_col_name] = df_neighbours[val_col_name].round(4)
@@ -138,7 +144,7 @@ with tab1:
     if st.session_state["query_word"] and wv:
         try:
             query = st.session_state["query_word"]
-            sim_words = get_similar_words(wv, query, metric=selected_metric, topn=15)
+            sim_words = get_similar_words(wv, query, metric=selected_metric, topn=15, normalize_vectors=normalize_vectors)
             words_to_plot = [query] + [w for w, _ in sim_words]
 
             vectors = [wv[w] for w in words_to_plot]
