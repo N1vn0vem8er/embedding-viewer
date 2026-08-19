@@ -1,119 +1,20 @@
 import os
-import gc
-import psutil
 import streamlit as st
 import pandas as pd
-from gensim.models import FastText, Word2Vec, KeyedVectors
-from gensim.models.fasttext import load_facebook_model
 import plotly.express as px
 from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import normalize
-import numpy as np
+from embeddingsutils import (
+    get_model_files,
+    load_embedding_model,
+    get_wv,
+    get_similar_words
+)
 
 MODELS_DIR = "./models"
 
 st.set_page_config(page_title="Embedding Viewer", layout="wide")
-
-def check_and_free_memory(threshold_percent=80.0):
-    mem = psutil.virtual_memory()
-    if mem.percent > threshold_percent:
-        st.cache_resource.clear()
-        gc.collect()
-
-def get_model_files(directory):
-    if not os.path.exists(directory):
-        os.makedirs(directory, exist_ok=True)
-    valid_extensions = ('.model', '.vec', '.txt', '.bin', '.kv', '.glove')
-    return [f for f in os.listdir(directory) if f.endswith(valid_extensions)]
-
-def get_wv(model):
-    return getattr(model, 'wv', model)
-
-def get_sentence_vector(text, wv):
-    words = text.lower().split()
-    vectors = []
-    for w in words:
-        try:
-            vectors.append(wv[w])
-        except KeyError:
-            continue
-    if len(vectors) == 0:
-        return np.zeros(wv.vector_size)
-    return np.mean(vectors, axis=0)
-
-@st.cache_resource
-def load_embedding_model(filepath):
-    check_and_free_memory(80.0)
-
-    try:
-        return KeyedVectors.load(filepath)
-    except Exception:
-        pass
-    try:
-        return FastText.load(filepath)
-    except Exception:
-        pass
-    try:
-        return Word2Vec.load(filepath)
-    except Exception:
-        pass
-    try:
-        return load_facebook_model(filepath)
-    except Exception:
-        pass
-    try:
-        return KeyedVectors.load_word2vec_format(filepath, binary=False)
-    except Exception:
-        pass
-    try:
-        return KeyedVectors.load_word2vec_format(filepath, binary=True)
-    except Exception:
-        pass
-    try:
-        return KeyedVectors.load_word2vec_format(filepath, binary=False, no_header=True)
-    except Exception:
-        pass
-
-def get_similar_words(wv, query_word, metric="cosine", topn=15):
-    if metric == "cosine":
-        return wv.most_similar(query_word, topn=topn)
-
-    query_vec = wv[query_word]
-    all_vectors = wv.vectors
-    index_to_key = wv.index_to_key
-
-    if metric == "dot":
-        scores = np.dot(all_vectors, query_vec)
-        best_indices = np.argsort(scores)[::-1][:topn+1]
-    elif metric == "euclidean":
-        diff = all_vectors - query_vec
-        distances = np.linalg.norm(diff, axis=1)
-        best_indices = np.argsort(distances)[:topn+1]
-    elif metric == "manhattan":
-        diff = all_vectors - query_vec
-        distances = np.sum(np.abs(diff), axis=1)
-        best_indices = np.argsort(distances)[:topn+1]
-    elif metric == "chebyshev":
-        diff = all_vectors - query_vec
-        distances = np.max(np.abs(diff), axis=1)
-        best_indices = np.argsort(distances)[:topn+1]
-    else:
-        raise ValueError("Unknown metric")
-    results = []
-    for idx in best_indices:
-        word = index_to_key[idx]
-        if word != query_word:
-            if metric == "dot":
-                val = float(scores[idx])
-            else:
-                val = float(distances[idx])
-            results.append((word, val))
-        if len(results) == topn:
-            break
-
-    return results
-
 
 model_files = get_model_files(MODELS_DIR)
 
