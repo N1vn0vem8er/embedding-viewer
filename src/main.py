@@ -9,6 +9,7 @@ import plotly.express as px
 from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import normalize
+import numpy as np
 
 MODELS_DIR = "./models"
 
@@ -74,6 +75,45 @@ def load_embedding_model(filepath):
     except Exception:
         pass
 
+def get_similar_words(wv, query_word, metric="cosine", topn=15):
+    if metric == "cosine":
+        return wv.most_similar(query_word, topn=topn)
+
+    query_vec = wv[query_word]
+    all_vectors = wv.vectors
+    index_to_key = wv.index_to_key
+
+    if metric == "dot":
+        scores = np.dot(all_vectors, query_vec)
+        best_indices = np.argsort(scores)[::-1][:topn+1]
+    elif metric == "euclidean":
+        diff = all_vectors - query_vec
+        distances = np.linalg.norm(diff, axis=1)
+        best_indices = np.argsort(distances)[:topn+1]
+    elif metric == "manhattan":
+        diff = all_vectors - query_vec
+        distances = np.sum(np.abs(diff), axis=1)
+        best_indices = np.argsort(distances)[:topn+1]
+    elif metric == "chebyshev":
+        diff = all_vectors - query_vec
+        distances = np.max(np.abs(diff), axis=1)
+        best_indices = np.argsort(distances)[:topn+1]
+    else:
+        raise ValueError("Unknown metric")
+    results = []
+    for idx in best_indices:
+        word = index_to_key[idx]
+        if word != query_word:
+            if metric == "dot":
+                val = float(scores[idx])
+            else:
+                val = float(distances[idx])
+            results.append((word, val))
+        if len(results) == topn:
+            break
+
+    return results
+
 
 model_files = get_model_files(MODELS_DIR)
 
@@ -115,7 +155,17 @@ with tab1:
     col1, col2 = st.columns(2)
 
     with col1:
-        st.subheader("NEAREST NEIGHBOURS")
+        st.subheader("Nearest Neighbours")
+
+        metric_options = {
+                    "Cosine similarity": "cosine",
+                    "Euclidean distance": "euclidean",
+                    "Manhattan distance": "manhattan",
+                    "Chebyshev distance": "chebyshev",
+                    "Dot product": "dot"
+                }
+        selected_metric_label = st.selectbox("Distance Metric", list(metric_options.keys()))
+        selected_metric = metric_options[selected_metric_label]
 
         input_col, btn_col = st.columns([3, 1])
         with input_col:
@@ -123,16 +173,17 @@ with tab1:
         with btn_col:
             search_clicked = st.button("Search", use_container_width=True)
 
-        st.caption("Cosine similarity over the trained word vectors. Click any neighbour to query it.")
+        st.caption(f"Finding neighbours using {selected_metric_label.lower()}. Click any neighbour to query it.")
 
         if search_clicked or current_input != st.session_state["query_word"]:
             st.session_state["query_word"] = current_input
 
         if st.session_state["query_word"] and wv:
             try:
-                similar_words = wv.most_similar(st.session_state["query_word"], topn=15)
-                df_neighbours = pd.DataFrame(similar_words, columns=["Word", "Score"])
-                df_neighbours["Score"] = df_neighbours["Score"].round(3)
+                similar_words = get_similar_words(wv, st.session_state["query_word"], metric=selected_metric, topn=15)
+                val_col_name = "Score" if selected_metric in ["cosine", "dot"] else "Distance"
+                df_neighbours = pd.DataFrame(similar_words, columns=["Word", val_col_name])
+                df_neighbours[val_col_name] = df_neighbours[val_col_name].round(4)
 
                 event = st.dataframe(
                     df_neighbours,
@@ -155,7 +206,7 @@ with tab1:
                 st.error(f"Search error: {e}")
 
     with col2:
-        st.subheader("VOCABULARY BROWSER")
+        st.subheader("Vocabulary Browser")
 
         filter_query = st.text_input("Filter vocabulary", placeholder="Filter the top vocabulary...", label_visibility="collapsed")
         st.caption("Click a row to look up its neighbours and add it to the plot. Click column headers to sort.")
@@ -181,13 +232,12 @@ with tab1:
             )
 
     st.divider()
-    st.subheader("2-D PCA PROJECTION")
+    st.subheader("2-D PCA Projection")
 
     if st.session_state["query_word"] and wv:
         try:
             query = st.session_state["query_word"]
-
-            sim_words = wv.most_similar(query, topn=15)
+            sim_words = get_similar_words(wv, query, metric=selected_metric, topn=15)
             words_to_plot = [query] + [w for w, _ in sim_words]
 
             vectors = [wv[w] for w in words_to_plot]
