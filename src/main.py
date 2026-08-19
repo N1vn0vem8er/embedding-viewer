@@ -7,6 +7,8 @@ from gensim.models import FastText, Word2Vec, KeyedVectors
 from gensim.models.fasttext import load_facebook_model
 import plotly.express as px
 from sklearn.decomposition import PCA
+from sklearn.cluster import KMeans
+from sklearn.preprocessing import normalize
 
 MODELS_DIR = "./models"
 
@@ -99,9 +101,10 @@ else:
 st.title("Embedding viewer")
 st.caption(f"{vocab_size} vocab · {vocab_size} vectors shipped · dim={vector_dim} · trained in {model_type}")
 
-tab1, tab2 = st.tabs([
-    "Exploration (k-NN & PCA)",
+tab1, tab2, tab3 = st.tabs([
+    "Exploration",
     "Out Of Vocabulary",
+    "Clustering"
 ])
 
 with tab1:
@@ -233,3 +236,46 @@ with tab2:
                 st.dataframe(pd.DataFrame(sims, columns=["Neighbor in Vocab", "Similarity Score"]))
             except KeyError:
                 st.error("This model does not support subword embeddings (it might be a standard Word2Vec/GloVe or missing n-gram data).")
+
+with tab3:
+    st.subheader("Word / Concept Clustering (K-Means)")
+    st.markdown("Enter a list of words (separated by commas). The model will convert them into vectors, and K-Means will divide them into groups of similar meaning.")
+
+    words_input = st.text_area("List of words:", value="Επιστήμη, Θεωρία, Μαθηματικά, Φιλοσοφία, Λογική, Αγάπη, Θυμός, Χαρά, Φόβος, Λύπη")
+    k_clusters = st.slider("Number of clusters (K):", min_value=2, max_value=10, value=4)
+
+    if st.button("Cluster Words") and wv:
+        words = [w.strip() for w in words_input.split(",") if w.strip()]
+        valid_words = []
+        vectors = []
+
+        for w in words:
+            try:
+                vectors.append(wv[w])
+                valid_words.append(w)
+            except KeyError:
+                pass
+
+        if len(valid_words) >= k_clusters:
+            kmeans = KMeans(n_clusters=k_clusters, random_state=42)
+            labels = kmeans.fit_predict(normalize(vectors))
+
+            pca = PCA(n_components=2)
+            coords = pca.fit_transform(normalize(vectors))
+
+            df_cluster = pd.DataFrame({
+                "Word": valid_words,
+                "Cluster": [f"Cluster {l}" for l in labels],
+                "PC1": coords[:, 0],
+                "PC2": coords[:, 1]
+            })
+
+            fig2 = px.scatter(
+                df_cluster, x="PC1", y="PC2", color="Cluster", text="Word", size_max=60
+            )
+            fig2.update_traces(textposition='top right', marker=dict(size=12))
+            st.plotly_chart(fig2, use_container_width=True)
+
+            st.dataframe(df_cluster[["Cluster", "Word"]].sort_values("Cluster"), hide_index=True)
+        else:
+            st.error(f"Not enough valid words found in the model to form {k_clusters} clusters.")
